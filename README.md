@@ -2,275 +2,141 @@
 
 <img src="https://octodex.github.com/images/Professortocat_v2.png" align="right" height="200px" />
 
-Hey there!
+This project is a simple AIOps exercise built around a payment service that is generating synthetic operational data. The goal is to look at the metrics and logs, decide what looks normal, flag what looks wrong, and then make sure those anomalies flow through a basic event pipeline the way a real monitoring system would.
 
-Your challenge is ready.
-Follow the instructions provided for this challenge and complete the required tasks in this repository.
+It is intentionally small, but it covers the core pattern you want to see: healthy service behaviour, a clear degradation window, and a working event flow that carries the anomaly through the system.
 
-Make sure your work is committed and pushed to your repository before submission.
+## What the data shows
 
-Good luck!
+The operational data is stored in [data/service_data.json](data/service_data.json). Each record represents one minute of service activity for the `payment-service`.
 
-## Operational Data Analysis
+Each entry includes:
 
-The repository includes a small synthetic operational dataset in [data/service_data.json](data/service_data.json). Each record represents one minute of service activity for the `payment-service`.
+- `timestamp`: when the reading was captured
+- `service`: which service emitted it
+- `response_time_ms`: how long a request took
+- `cpu_percent`: CPU usage
+- `memory_percent`: memory usage
+- `log_level`: the log severity (`INFO` or `ERROR`)
+- `message`: the text describing what happened
 
-### 1. Fields that represent metrics
+The timestamps are ordered by minute, so the timeline is easy to follow. The first few records look healthy, the middle records show a clear issue, and the later records recover back to normal.
 
-The numerical fields that represent operational metrics are:
+## Normal vs unusual behaviour
 
-- `response_time_ms`: request latency in milliseconds
-- `cpu_percent`: CPU usage percentage
-- `memory_percent`: memory consumption percentage
+From the beginning of the timeline and then again near the end, the service looks healthy:
 
-These values indicate runtime performance and resource consumption over time.
+- response times sit around 120-150 ms
+- CPU usage stays around 42-50%
+- memory stays around 51-57%
+- the logs are `INFO` with messages like "Payment request processed successfully"
 
-### 2. Fields that represent log information
+That is the normal baseline.
 
-The textual fields that represent log information are:
+The unusual behaviour is easy to spot in the middle of the dataset:
 
-- `log_level`: severity (`INFO` or `ERROR`)
-- `message`: the log message text describing the event
-- `service`: indicates which service produced the event
+- `2026-09-20T10:05:00`: response time hits 610 ms, CPU reaches 75%, memory reaches 70%, and the log is `ERROR` with "Payment service timeout"
+- `2026-09-20T10:06:00`: response time hits 640 ms, CPU reaches 94%, memory reaches 91%, and the log says `ERROR` with "Database connection timeout"
 
-Together, these fields describe what happened and how serious it was.
+Those two moments are clearly not normal. They show degraded service health and a likely backend issue.
 
-### 3. How timestamps are used
+## Which fields are metrics vs logs
 
-The `timestamp` field uses ISO 8601 timestamps in the format `YYYY-MM-DDTHH:MM:SS` and is recorded once per minute.
+The metric fields are:
 
-This gives a consistent sequence of events:
+- `response_time_ms`
+- `cpu_percent`
+- `memory_percent`
 
-- observations occur at 10:00 through 10:09
-- the timestamps allow us to identify a time-ordered timeline
-- the pattern shows a normal period, a brief abnormal period, and then a recovery period
+The log-related fields are:
 
-### 4. Observations that appear normal
+- `log_level`
+- `message`
+- `service`
 
-The normal behaviour appears in the records from `2026-09-20T10:00:00` through `2026-09-20T10:04:00`, and again from `2026-09-20T10:07:00` through `2026-09-20T10:09:00`.
+Together they tell the same story from two angles: the service is slowing down and the logs confirm the failure mode.
 
-Typical normal signals include:
+## Anomaly detection result
 
-- `log_level` = `INFO`
-- `message` = "Payment request processed successfully"
-- `response_time_ms` stays between 120 and 150 ms
-- `cpu_percent` stays roughly between 42% and 50%
-- `memory_percent` stays roughly between 51% and 57%
+The detector in [src/anomaly_detector.py](src/anomaly_detector.py) is designed to flag records when a metric exceeds the configured threshold or a concerning error log appears. In this dataset, it detects two anomalies.
 
-This pattern reflects stable request handling with moderate resource use.
-
-### 5. Observations that appear unusual
-
-The unusual behaviour is concentrated in the two error events at:
-
-- `2026-09-20T10:05:00`: `response_time_ms` = 610, `cpu_percent` = 75, `memory_percent` = 70, `log_level` = `ERROR`, message = "Payment service timeout"
-- `2026-09-20T10:06:00`: `response_time_ms` = 640, `cpu_percent` = 94, `memory_percent` = 91, `log_level` = `ERROR`, message = "Database connection timeout"
-
-These observations stand out because they show:
-
-- a sharp jump in latency from around 120-150 ms to 610-640 ms
-- elevated CPU and memory usage
-- error-level log entries indicating service degradation or backend connection failure
-- a clear incident window followed by a return to normal operation in the next minutes
-
-In summary, the data shows a stable baseline followed by a short but significant outage or performance spike, then recovery to normal operating conditions.
-
-## Anomaly Detection Validation
-
-I validated the provided detection workflow using the repository’s service data and the built-in detector in [src/anomaly_detector.py](src/anomaly_detector.py). The pipeline was run via [src/aiops_pipeline.py](src/aiops_pipeline.py), which processes the dataset, emits anomaly events to the in-memory topic, and consumes the same events back for reporting.
-
-### Detection result
-
-The pipeline processed 10 records and detected 2 anomalies.
-
-Detected anomalies:
+### Detected anomalies
 
 1. `2026-09-20T10:05:00` — `payment-service`
-   - Metrics: `response_time_ms` = 610, `cpu_percent` = 75, `memory_percent` = 70
-   - Log: `log_level` = `ERROR`, message = "Payment service timeout"
-   - Reasons: `High response time`, `Error log detected`
+   - response time: 610 ms
+   - CPU: 75%
+   - memory: 70%
+   - log: `ERROR` — "Payment service timeout"
+   - reasons: `High response time`, `Error log detected`
 
 2. `2026-09-20T10:06:00` — `payment-service`
-   - Metrics: `response_time_ms` = 640, `cpu_percent` = 94, `memory_percent` = 91
-   - Log: `log_level` = `ERROR`, message = "Database connection timeout"
-   - Reasons: `High response time`, `High CPU utilization`, `High memory utilization`, `Error log detected`
+   - response time: 640 ms
+   - CPU: 94%
+   - memory: 91%
+   - log: `ERROR` — "Database connection timeout"
+   - reasons: `High response time`, `High CPU utilization`, `High memory utilization`, `Error log detected`
 
-### Normal vs anomalous observations
+There were no missed expected anomalies in this dataset, and no normal records were incorrectly flagged.
 
-The detector correctly distinguished the stable baseline from the incident window:
+## Event-flow check
 
-- Normal observations were the records with low latency, moderate CPU/memory usage, and `INFO` log entries such as "Payment request processed successfully".
-- The anomalous records were those with sharply elevated latency and resource metrics plus `ERROR` logs.
+The event pipeline in [src/aiops_pipeline.py](src/aiops_pipeline.py) follows the basic AIOps flow:
 
-### Missed or false positives
+1. read operational data
+2. detect anomalies
+3. generate anomaly events
+4. publish them with the producer
+5. send them to the topic
+6. consume them with the consumer
+7. surface the result in the downstream output
 
-- Expected anomalies missed: none in the provided dataset. The clear threshold breach and error log patterns were both detected.
-- Normal events incorrectly flagged: none. The records before the incident and after recovery remained below the anomaly thresholds and were not emitted as anomalies.
-
-### Readability and evidence
-
-The result is readable and contains enough context for diagnosis because each emitted anomaly includes:
-
-- timestamp
-- service name
-- anomaly type
-- explicit reasons for the flag
-- the original source record
-
-This makes it easy to understand both the metric-driven and log-driven cause of the anomaly.
-
-### Limitation / improvement
-
-A limitation of this approach is that it relies on fixed thresholds. It can reliably catch obvious spikes, but it may miss subtler drift or cross-signal anomalies that do not individually exceed a threshold yet still indicate a problem. A possible improvement would be to add rolling baselines or statistical thresholds (for example, z-score or percentile-based detection) and to correlate metric spikes with error log patterns more explicitly.
-
-## Event Flow Validation
-
-The repository contains a lightweight in-memory event-streaming simulation. The workflow is implemented through the following components:
-
-- `EventProducer`: accepts a detected anomaly event and publishes it to a topic.
-- `EventTopic`: stores the event messages in an in-memory topic buffer.
-- `EventConsumer`: reads the messages from the topic.
-- `Event/message`: the structured anomaly payload that travels through the pipeline.
-
-### Execution verification
-
-I executed the workflow with:
-
-- `cd /workspaces/github-skills-challenge && python src/aiops_pipeline.py`
-
-This produced the following result:
-
-- `Records processed: 10`
-- `Anomalies detected: 2`
-- `Events consumed: 2`
-
-The detected anomaly events were:
-
-1. `2026-09-20T10:05:00` — service `payment-service`
-   - Reasons: `High response time`, `Error log detected`
-2. `2026-09-20T10:06:00` — service `payment-service`
-   - Reasons: `High response time`, `High CPU utilization`, `High memory utilization`, `Error log detected`
-
-### Workflow validation checks
-
-The workflow satisfies the required checks:
-
-1. An anomaly identified by detection results in an event.
-   - The detector returns an anomaly object with `type` = `ANOMALY` and a `source` record.
-2. The event is passed to the producer.
-   - The pipeline calls `producer.publish(event)` for each flagged record.
-3. The producer publishes the event to the appropriate topic.
-   - `EventProducer.publish()` calls `self.topic.publish(event)`.
-4. The consumer receives the event from the topic.
-   - `EventConsumer.consume()` returns `self.topic.get_messages()`.
-5. The consumer processes the received event.
-   - The pipeline collects the consumed list and reports it as the downstream processed events.
-6. The processed event reaches the downstream AIOps component.
-   - The pipeline returns the consumed events through `result["events_consumed"]`, which is then printed in the execution output.
-
-This confirms that an anomaly can travel through the complete event-processing pipeline and be surfaced as a readable downstream result.
-
-## AIOps Scenario Overview
-
-This project simulates a simple AIOps workflow for a payment service. The service emits operational data consisting of minute-by-minute measurements and log events. The goal is to detect abnormal behaviour, turn that abnormality into an event, and route it through a lightweight streaming pipeline so an operations component can identify and understand the issue.
-
-The dataset is intentionally small but realistic: it contains a stable baseline, a short incident period, and a return to normal operation. This makes it suitable for validating the logic that distinguishes healthy telemetry from operational degradation.
-
-## Operational Data Description
-
-The operational data is stored in [data/service_data.json](data/service_data.json). Each record includes:
-
-- `timestamp`: timestamp of the observation in ISO 8601 format
-- `service`: service name
-- `response_time_ms`: response latency for a request
-- `cpu_percent`: CPU usage percentage
-- `memory_percent`: memory usage percentage
-- `log_level`: message severity (`INFO` or `ERROR`)
-- `message`: textual event message
-
-The data follows a timeline from `2026-09-20T10:00:00` to `2026-09-20T10:09:00` and represents repeated service checks over ten minutes.
-
-## Observations from Logs and Metrics
-
-The normal period is represented by low response times and moderate resource usage, with messages such as "Payment request processed successfully" and `INFO` logs. The abnormal period is marked by a large response-time spike and elevated CPU and memory usage, accompanied by `ERROR` logs such as "Payment service timeout" and "Database connection timeout".
-
-The overall signal is consistent with a short incident in which the service became slow or degraded, followed by recovery to baseline levels.
-
-## Anomaly Detection Findings
-
-The provided detector in [src/anomaly_detector.py](src/anomaly_detector.py) flags records when metrics or logs exceed expected ranges. In this dataset, the detector identifies two anomalies:
-
-1. `2026-09-20T10:05:00` — `response_time_ms` = 610, `log_level` = `ERROR`, message = "Payment service timeout"
-2. `2026-09-20T10:06:00` — `response_time_ms` = 640, `cpu_percent` = 94, `memory_percent` = 91, `log_level` = `ERROR`, message = "Database connection timeout"
-
-These anomalies are clearly distinguishable from normal behaviour because they include elevated latency, high utilisation, and error events.
-
-## Event-Processing Flow
-
-The event-processing pipeline in [src/aiops_pipeline.py](src/aiops_pipeline.py) follows the standard flow below:
-
-1. Load operational records from the data file.
-2. Run each record through the anomaly detector.
-3. If a record is anomalous, create an anomaly event object.
-4. Publish the event using the producer.
-5. Store the event in the in-memory topic.
-6. Consume the event through the consumer.
-7. Report the consumed and processed anomaly event in the AIOps output.
-
-The main components are:
+The components involved are:
 
 - `EventProducer`: publishes the anomaly event
-- `EventTopic`: in-memory broker/topic buffer
-- `EventConsumer`: consumes events from the topic
-- `Event/message`: payload passed through the pipeline
+- `EventTopic`: stores the event in memory
+- `EventConsumer`: reads the event from the topic
+- `Event/message`: the payload being passed through the pipeline
 
-## Final Workflow Execution Result
+This part of the project is working as intended in the final version.
 
-The final execution of the corrected workflow produced:
+## Final workflow result
+
+I ran the pipeline and got this output:
 
 - `Records processed: 10`
 - `Anomalies detected: 2`
 - `Events consumed: 2`
 
-The final output clearly identifies the operational issue as the payment service experiencing timeout and degradation conditions during the incident window.
+That confirms the complete flow is working end to end: operational data is processed, the abnormal behaviour is detected, an anomaly event is emitted, the event is published, the consumer receives it, and the downstream workflow reports the issue.
 
-## Issues Identified and Corrected
+## Issues I found and corrected
 
-I identified and corrected several issues in the provided workflow:
+I fixed a few problems while validating the workflow:
 
-1. Import path problem in the test environment
-   - Cause: the project root was not on Python’s import path and the `src` package was not recognized.
-   - Fix: added [src/__init__.py](src/__init__.py) and [pytest.ini](pytest.ini).
+1. The project import path was not set up correctly for pytest.
+   - fix: added [src/__init__.py](src/__init__.py) and [pytest.ini](pytest.ini)
 
-2. Log-level detection bug
-   - Cause: the detector incorrectly checked for `WARNING` instead of `ERROR` when evaluating concerning log events.
-   - Fix: normalize the log level to uppercase and treat `ERROR` as a relevant anomaly signal.
+2. The detector was checking for `WARNING` instead of `ERROR`.
+   - fix: normalize the log value and flag `ERROR` correctly in [src/anomaly_detector.py](src/anomaly_detector.py)
 
-3. Topic wiring mismatch
-   - Cause: the producer and consumer were connected to different topics instead of the same event stream.
-   - Fix: align the producer and consumer to the same `EventTopic` instance so the event can be consumed after publication.
+3. The producer and consumer were not using the same topic.
+   - fix: align them to the same event stream in [src/aiops_pipeline.py](src/aiops_pipeline.py)
 
-4. File path issue for direct script execution
-   - Cause: data files were resolved relative to the current working directory rather than the project root.
-   - Fix: resolve file paths relative to the repository root to ensure consistent execution.
+4. The script was not resolving the data file reliably from the repo root.
+   - fix: resolve paths relative to the project root so direct execution works consistently
 
-## Limitation / Possible Improvement
+## One limitation
 
-The current detection approach relies on fixed thresholds for latency, CPU, and memory. This works well for obvious spikes, but it may miss gradual degradation or anomalies that only become visible when several metrics move together. A possible improvement is to add baseline-based or statistical detection (for example, rolling averages or z-scores) so the system can identify more subtle departures from normal behaviour.
+The approach uses fixed thresholds for latency, CPU, and memory. That is fine for obvious spikes, but it can miss gradual degradation that does not immediately cross a threshold. A good next step would be to add baseline-based detection, like rolling averages or z-scores, so the service can spot drift before it becomes a full outage.
 
-## Reproduction Steps
+## How to reproduce it
 
-To reproduce this demonstration in another environment:
+Run these commands from the project root:
 
-1. Open a terminal in the repository root.
-2. Ensure Python dependencies are installed (the project uses the standard library only, so no additional package installation is required beyond the provided environment).
-3. Run the test suite:
-   - `pytest -q`
-4. Run the end-to-end workflow:
-   - `python src/aiops_pipeline.py`
-5. Review the output to confirm that the dataset is processed, anomalies are detected, anomalies are published to the event topic, and the consumer surfaces the detected operational issue.
+1. `pytest -q`
+2. `python src/aiops_pipeline.py`
 
-The expected result is that the pipeline processes 10 records and reports 2 anomaly events for the timeout and resource saturation period.
+The expected result is that the tests pass and the pipeline reports 2 anomalies for the timeout and high-resource period.
 
 ---
 
